@@ -1,0 +1,4 @@
+display_name: Voxel OpenGL Python
+short_description: Work on the repository's Python voxel OpenGL demo.
+default_prompt: Improve or debug the voxel OpenGL Python course project while preserving its scoped tech-demo goals.
+
