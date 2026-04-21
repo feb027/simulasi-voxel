@@ -4,7 +4,8 @@ from typing import Tuple
 
 import numpy as np
 
-from src.world import AIR, BLOCK_COLORS, VoxelWorld
+from src.textures import atlas_uvs, block_tile
+from src.world import AIR, VoxelWorld
 
 FACE_DEFINITIONS = (
     ((0, 0, -1), ((0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)), 0.82),
@@ -14,6 +15,20 @@ FACE_DEFINITIONS = (
     ((0, -1, 0), ((0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)), 0.72),
     ((0, 1, 0), ((0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)), 1.08),
 )
+
+UV_ORDER_BY_NORMAL = {
+    (0, 0, -1): (0, 1, 2, 3),
+    (0, 0, 1): (0, 3, 2, 1),
+    (-1, 0, 0): (0, 3, 2, 1),
+    (1, 0, 0): (0, 1, 2, 3),
+    (0, -1, 0): (0, 3, 2, 1),
+    (0, 1, 0): (0, 1, 2, 3),
+}
+
+
+def oriented_face_uvs(block_id: int, normal: tuple[int, int, int]) -> tuple[tuple[float, float], ...]:
+    base_uvs = atlas_uvs(block_tile(block_id, normal))
+    return tuple(base_uvs[index] for index in UV_ORDER_BY_NORMAL[normal])
 
 
 def build_chunk_mesh(world: VoxelWorld, chunk_position: Tuple[int, int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -40,8 +55,6 @@ def build_chunk_mesh(world: VoxelWorld, chunk_position: Tuple[int, int, int]) ->
         world_x = origin_x + int(local_x)
         world_y = origin_y + int(local_y)
         world_z = origin_z + int(local_z)
-        base_color = np.array(BLOCK_COLORS[block_id], dtype=np.float32)
-
         for normal, face_vertices, brightness in FACE_DEFINITIONS:
             nx = int(local_x) + normal[0]
             ny = int(local_y) + normal[1]
@@ -54,20 +67,20 @@ def build_chunk_mesh(world: VoxelWorld, chunk_position: Tuple[int, int, int]) ->
                 if world.get_block_world(world_x + normal[0], world_y + normal[1], world_z + normal[2]) != AIR:
                     continue
 
-            color = np.clip(base_color * brightness, 0.0, 1.0)
             normal_array = np.array(normal, dtype=np.float32)
-            for corner in face_vertices:
+            face_uvs = oriented_face_uvs(block_id, normal)
+            for corner, uv in zip(face_vertices, face_uvs):
                 vertices.extend(
                     (
                         float(world_x + corner[0]),
                         float(world_y + corner[1]),
                         float(world_z + corner[2]),
-                        float(color[0]),
-                        float(color[1]),
-                        float(color[2]),
+                        float(uv[0]),
+                        float(uv[1]),
                         float(normal_array[0]),
                         float(normal_array[1]),
                         float(normal_array[2]),
+                        float(brightness),
                     )
                 )
 

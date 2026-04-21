@@ -34,6 +34,7 @@ class GameApp:
         self.renderer.resize(self.window.width, self.window.height)
         self.renderer.rebuild_world(self.world)
         self.hud_text = ""
+        self.fps = 0.0
         self.current_hit: RaycastHit | None = None
 
         pyglet.clock.schedule_interval(self.update, 1.0 / 120.0)
@@ -41,6 +42,12 @@ class GameApp:
             pyglet.clock.schedule_once(lambda _dt: self.window.close(), 0.35)
 
     def update(self, dt: float) -> None:
+        raw_dt = max(dt, 1.0e-6)
+        instant_fps = 1.0 / raw_dt
+        if self.fps == 0.0:
+            self.fps = instant_fps
+        else:
+            self.fps = self.fps * 0.9 + instant_fps * 0.1
         dt = min(dt, 1.0 / 30.0)
         input_state = {
             "forward": bool(self.window.keys[key.W]),
@@ -104,6 +111,7 @@ class GameApp:
 
         self.hud_text = (
             "Voxel OpenGL Demo\n"
+            f"FPS: {self.fps:.1f}\n"
             f"Pos: ({self.player.position[0]:.2f}, {self.player.position[1]:.2f}, {self.player.position[2]:.2f})\n"
             f"Yaw/Pitch: ({self.camera.yaw:.1f}, {self.camera.pitch:.1f})\n"
             f"Chunks: {len(self.renderer.chunk_meshes)} / {len(self.world.chunks)}\n"

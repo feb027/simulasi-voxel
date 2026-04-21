@@ -26,5 +26,4 @@
 ## Demo Tips
 - Start with a short walk to show fog depth and face-culling performance.
 - Pause the mouse with `TAB` if you need to discuss the screen.
-- Use the HUD readout to explain chunk count, selected block, and basic controls.
-
+- Use the HUD readout to explain FPS, chunk count, selected block, and basic controls.

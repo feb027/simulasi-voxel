@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from OpenGL.GL import (
     GL_ARRAY_BUFFER,
+    GL_CLAMP_TO_EDGE,
     GL_COLOR_BUFFER_BIT,
     GL_COMPILE_STATUS,
     GL_CULL_FACE,
@@ -23,13 +24,24 @@ from OpenGL.GL import (
     GL_LINES,
     GL_LINE_SMOOTH,
     GL_LINK_STATUS,
+    GL_NEAREST,
+    GL_RGB,
     GL_STATIC_DRAW,
+    GL_TEXTURE_2D,
+    GL_TEXTURE_MAG_FILTER,
+    GL_TEXTURE_MIN_FILTER,
+    GL_TEXTURE_WRAP_S,
+    GL_TEXTURE_WRAP_T,
+    GL_TEXTURE0,
     GL_TRIANGLES,
     GL_TRUE,
     GL_UNSIGNED_INT,
+    GL_UNSIGNED_BYTE,
     GL_VERTEX_SHADER,
+    glActiveTexture,
     glAttachShader,
     glBindBuffer,
+    glBindTexture,
     glBindVertexArray,
     glBufferData,
     glClear,
@@ -37,6 +49,7 @@ from OpenGL.GL import (
     glDeleteBuffers,
     glDeleteProgram,
     glDeleteShader,
+    glDeleteTextures,
     glDeleteVertexArrays,
     glDepthFunc,
     glDisable,
@@ -44,6 +57,7 @@ from OpenGL.GL import (
     glEnable,
     glEnableVertexAttribArray,
     glGenBuffers,
+    glGenTextures,
     glGenVertexArrays,
     glGetProgramInfoLog,
     glGetProgramiv,
@@ -53,7 +67,10 @@ from OpenGL.GL import (
     glLinkProgram,
     glPolygonMode,
     glShaderSource,
+    glTexImage2D,
+    glTexParameteri,
     glUniform3f,
+    glUniform1i,
     glUniformMatrix4fv,
     glUseProgram,
     glVertexAttribPointer,
@@ -66,6 +83,7 @@ from OpenGL.GL import (
 from src import settings
 from src.camera import Camera
 from src.meshing import build_chunk_mesh
+from src.textures import generate_texture_atlas
 from src.world import VoxelWorld
 
 
@@ -109,6 +127,10 @@ class ShaderProgram:
         location = glGetUniformLocation(self.program, name)
         glUniform3f(location, float(value[0]), float(value[1]), float(value[2]))
 
+    def set_int(self, name: str, value: int) -> None:
+        location = glGetUniformLocation(self.program, name)
+        glUniform1i(location, value)
+
     def delete(self) -> None:
         glDeleteProgram(self.program)
 
@@ -119,6 +141,7 @@ class VoxelRenderer:
         self.voxel_shader = ShaderProgram(shader_dir / "voxel.vert", shader_dir / "voxel.frag")
         self.outline_shader = ShaderProgram(shader_dir / "outline.vert", shader_dir / "outline.frag")
         self.chunk_meshes: dict[tuple[int, int, int], ChunkMesh] = {}
+        self.atlas_texture = self._create_texture_atlas()
         self.outline_mesh = self._create_outline_mesh()
         self.configure_state()
 
@@ -162,12 +185,16 @@ class VoxelRenderer:
         self.voxel_shader.set_vec3("u_camera_pos", camera.position)
         self.voxel_shader.set_vec3("u_fog_color", settings.FOG_COLOR)
         self.voxel_shader.set_vec3("u_sun_direction", (0.6, 1.0, 0.35))
+        self.voxel_shader.set_int("u_texture_atlas", 0)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.atlas_texture)
 
         for mesh in self.chunk_meshes.values():
             glBindVertexArray(mesh.vao)
             glDrawElements(GL_TRIANGLES, mesh.index_count, GL_UNSIGNED_INT, None)
 
         glBindVertexArray(0)
+        glBindTexture(GL_TEXTURE_2D, 0)
 
         if target_block is not None:
             self._draw_outline(camera, target_block)
@@ -187,12 +214,36 @@ class VoxelRenderer:
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
         glEnableVertexAttribArray(1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
         glEnableVertexAttribArray(2)
-        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(24))
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(20))
+        glEnableVertexAttribArray(3)
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(32))
 
         glBindVertexArray(0)
         return ChunkMesh(vao=vao, vbo=vbo, ebo=ebo, index_count=int(indices.size))
+
+    def _create_texture_atlas(self) -> int:
+        atlas = generate_texture_atlas()
+        texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, texture)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGB,
+            atlas.shape[1],
+            atlas.shape[0],
+            0,
+            GL_RGB,
+            GL_UNSIGNED_BYTE,
+            atlas,
+        )
+        glBindTexture(GL_TEXTURE_2D, 0)
+        return texture
 
     def _create_outline_mesh(self) -> ChunkMesh:
         vertices = np.zeros(8 * 3, dtype=np.float32)
@@ -258,5 +309,6 @@ class VoxelRenderer:
             self._delete_mesh(mesh)
         self.chunk_meshes.clear()
         self._delete_mesh(self.outline_mesh)
+        glDeleteTextures(1, [self.atlas_texture])
         self.voxel_shader.delete()
         self.outline_shader.delete()

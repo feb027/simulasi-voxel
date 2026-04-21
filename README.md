@@ -9,6 +9,7 @@ Tech demo voxel 3D bergaya Minecraft untuk tugas **Grafika Komputer**, dibangun 
 Proyek ini menampilkan world voxel kecil yang bisa dijelajahi dengan kamera first-person, lengkap dengan:
 - rendering OpenGL modern berbasis shader
 - chunk meshing dengan hidden-face culling
+- texture atlas procedural untuk permukaan block
 - collision sederhana + gravity + jump
 - fog dan directional lighting ringan
 - interaksi dasar break/place block
@@ -38,6 +39,7 @@ Hasilnya adalah world voxel yang enak didemokan, mudah dijelaskan, dan tetap pun
 - Kamera FPS dengan mouse look
 - Gerak `WASD`, jump, collision, gravity
 - Shader-based rendering (`VAO`, `VBO`, `EBO`, vertex shader, fragment shader)
+- Procedural texture atlas dengan UV mapping per-face
 - Depth testing dan face culling
 - Fog dan simple sunlight shading
 - Raycast highlight block
@@ -145,6 +147,7 @@ simulasi-minecraft/
 - Semua render memakai **modern OpenGL pipeline**
 - Geometri chunk dibangun di CPU, lalu di-upload ke GPU
 - Hanya face yang terlihat yang dimasukkan ke mesh
+- Permukaan block mengambil warna dari **texture atlas** kecil dengan UV mapping
 
 ### World
 - Terrain dibuat secara procedural sederhana
@@ -175,7 +178,6 @@ simulasi-minecraft/
 ## Catatan Pengembangan
 
 Kalau ingin melanjutkan proyek ini setelah MVP, kandidat fitur berikut paling masuk akal:
-- texture atlas
 - low-spec mode
 - save/load world sederhana
 - UI overlay yang lebih rapi
@@ -193,7 +195,6 @@ Kalau ingin melanjutkan proyek ini setelah MVP, kandidat fitur berikut paling ma
 Proyek ini sudah berada pada fase **voxel exploration tech demo** yang layak dijadikan base tugas grafika komputer.
 
 Kalau target berikutnya adalah membuatnya lebih mirip Minecraft, langkah terbaik biasanya mulai dari:
-- texture atlas
 - block type tambahan
 - world generation yang lebih menarik
 - polish demo flow

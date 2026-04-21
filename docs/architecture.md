@@ -17,8 +17,9 @@ This project is a compact voxel exploration demo that showcases modern OpenGL co
 ## Rendering Model
 - Chunks are meshed on the CPU.
 - Each visible face contributes 4 vertices and 6 indices.
-- Vertex attributes: position, color, normal.
+- Vertex attributes: position, atlas UV, normal, face shade.
 - Lighting is simple directional shading with fog in the fragment shader.
+- A small procedural texture atlas provides grass, dirt, stone, and grass-side tiles.
 - A second flat-color shader draws the wireframe block highlight.
 
 ## World Model
