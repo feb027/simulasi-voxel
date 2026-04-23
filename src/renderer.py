@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from OpenGL.GL import (
     GL_ARRAY_BUFFER,
+    GL_BLEND,
     GL_CLAMP_TO_EDGE,
     GL_COLOR_BUFFER_BIT,
     GL_COMPILE_STATUS,
@@ -25,7 +26,10 @@ from OpenGL.GL import (
     GL_LINE_SMOOTH,
     GL_LINK_STATUS,
     GL_NEAREST,
+    GL_ONE,
+    GL_ONE_MINUS_SRC_ALPHA,
     GL_RGB,
+    GL_SRC_ALPHA,
     GL_STATIC_DRAW,
     GL_TEXTURE_2D,
     GL_TEXTURE_MAG_FILTER,
@@ -46,6 +50,7 @@ from OpenGL.GL import (
     glBufferData,
     glClear,
     glClearColor,
+    glBlendFunc,
     glDeleteBuffers,
     glDeleteProgram,
     glDeleteShader,
@@ -70,6 +75,7 @@ from OpenGL.GL import (
     glTexImage2D,
     glTexParameteri,
     glUniform3f,
+    glUniform1f,
     glUniform1i,
     glUniformMatrix4fv,
     glUseProgram,
@@ -82,6 +88,7 @@ from OpenGL.GL import (
 
 from src import settings
 from src.camera import Camera
+from src.daynight import DayNightState
 from src.meshing import build_chunk_mesh
 from src.textures import generate_texture_atlas
 from src.world import VoxelWorld
@@ -131,6 +138,10 @@ class ShaderProgram:
         location = glGetUniformLocation(self.program, name)
         glUniform1i(location, value)
 
+    def set_float(self, name: str, value: float) -> None:
+        location = glGetUniformLocation(self.program, name)
+        glUniform1f(location, value)
+
     def delete(self) -> None:
         glDeleteProgram(self.program)
 
@@ -140,9 +151,11 @@ class VoxelRenderer:
         shader_dir = Path(__file__).resolve().parent.parent / "assets" / "shaders"
         self.voxel_shader = ShaderProgram(shader_dir / "voxel.vert", shader_dir / "voxel.frag")
         self.outline_shader = ShaderProgram(shader_dir / "outline.vert", shader_dir / "outline.frag")
+        self.celestial_shader = ShaderProgram(shader_dir / "celestial.vert", shader_dir / "celestial.frag")
         self.chunk_meshes: dict[tuple[int, int, int], ChunkMesh] = {}
         self.atlas_texture = self._create_texture_atlas()
         self.outline_mesh = self._create_outline_mesh()
+        self.celestial_mesh = self._create_celestial_mesh()
         self.configure_state()
 
     def configure_state(self) -> None:
@@ -170,21 +183,32 @@ class VoxelRenderer:
             return
         self.chunk_meshes[chunk_pos] = self._upload_mesh(vertices, indices, dynamic=False)
 
-    def draw(self, camera: Camera, target_block: tuple[int, int, int] | None = None) -> None:
+    def draw(
+        self,
+        camera: Camera,
+        env: DayNightState,
+        target_block: tuple[int, int, int] | None = None,
+    ) -> None:
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_CULL_FACE)
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        glClearColor(*env.clear_color)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         projection = camera.projection_matrix()
         view = camera.view_matrix()
 
+        self._draw_celestial(camera, projection, view, env)
+
         self.voxel_shader.use()
         self.voxel_shader.set_mat4("u_projection", projection)
         self.voxel_shader.set_mat4("u_view", view)
         self.voxel_shader.set_vec3("u_camera_pos", camera.position)
-        self.voxel_shader.set_vec3("u_fog_color", settings.FOG_COLOR)
-        self.voxel_shader.set_vec3("u_sun_direction", (0.6, 1.0, 0.35))
+        self.voxel_shader.set_vec3("u_fog_color", env.fog_color)
+        self.voxel_shader.set_vec3("u_sun_direction", env.light_direction)
+        self.voxel_shader.set_vec3("u_light_color", env.light_color)
+        self.voxel_shader.set_float("u_ambient_strength", env.ambient_strength)
+        self.voxel_shader.set_float("u_diffuse_strength", env.diffuse_strength)
         self.voxel_shader.set_int("u_texture_atlas", 0)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.atlas_texture)
@@ -269,6 +293,103 @@ class VoxelRenderer:
         glBindVertexArray(0)
         return ChunkMesh(vao=vao, vbo=vbo, ebo=ebo, index_count=int(indices.size))
 
+    def _create_celestial_mesh(self) -> ChunkMesh:
+        vertices = np.array(
+            [
+                0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 1.0,
+                0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+            dtype=np.float32,
+        )
+        indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
+
+        vao = glGenVertexArrays(1)
+        vbo = glGenBuffers(1)
+        ebo = glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, ctypes.c_void_p(12))
+        glBindVertexArray(0)
+        return ChunkMesh(vao=vao, vbo=vbo, ebo=ebo, index_count=int(indices.size))
+
+    def _draw_celestial(self, camera: Camera, projection: np.ndarray, view: np.ndarray, env: DayNightState) -> None:
+        self.celestial_shader.use()
+        self.celestial_shader.set_mat4("u_projection", projection)
+        self.celestial_shader.set_mat4("u_view", view)
+
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_CULL_FACE)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        glBindVertexArray(self.celestial_mesh.vao)
+
+        if env.sun_visibility > 0.0:
+            self.celestial_shader.set_vec3("u_color", env.sun_color)
+            self.celestial_shader.set_float("u_visibility", env.sun_visibility)
+            self.celestial_shader.set_float("u_core_strength", 1.95)
+            self.celestial_shader.set_float("u_halo_strength", 1.25)
+            self.celestial_shader.set_float("u_halo_radius", 1.34)
+            self.celestial_shader.set_float("u_edge_softness", 0.95)
+            self._draw_celestial_body(
+                camera,
+                camera.position + env.sun_direction * settings.CELESTIAL_DISTANCE,
+                settings.SUN_RADIUS_WORLD,
+            )
+
+        if env.moon_visibility > 0.0:
+            self.celestial_shader.set_vec3("u_color", env.moon_color)
+            self.celestial_shader.set_float("u_visibility", env.moon_visibility)
+            self.celestial_shader.set_float("u_core_strength", 0.86)
+            self.celestial_shader.set_float("u_halo_strength", 0.38)
+            self.celestial_shader.set_float("u_halo_radius", 1.26)
+            self.celestial_shader.set_float("u_edge_softness", 0.72)
+            self._draw_celestial_body(
+                camera,
+                camera.position + env.moon_direction * settings.CELESTIAL_DISTANCE,
+                settings.MOON_RADIUS_WORLD,
+            )
+
+        glBindVertexArray(0)
+        glDisable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glEnable(GL_CULL_FACE)
+        glEnable(GL_DEPTH_TEST)
+
+    def _draw_celestial_body(self, camera: Camera, center: np.ndarray, radius: float) -> None:
+        right = camera.right()
+        up = np.cross(right, camera.forward())
+        up_norm = np.linalg.norm(up)
+        if up_norm <= 1.0e-8:
+            up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        else:
+            up = (up / up_norm).astype(np.float32)
+
+        p0 = center - right * radius - up * radius
+        p1 = center + right * radius - up * radius
+        p2 = center + right * radius + up * radius
+        p3 = center - right * radius + up * radius
+
+        vertices = np.array(
+            [
+                p0[0], p0[1], p0[2], 0.0, 0.0,
+                p1[0], p1[1], p1[2], 1.0, 0.0,
+                p2[0], p2[1], p2[2], 1.0, 1.0,
+                p3[0], p3[1], p3[2], 0.0, 1.0,
+            ],
+            dtype=np.float32,
+        )
+        glBindBuffer(GL_ARRAY_BUFFER, self.celestial_mesh.vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_DYNAMIC_DRAW)
+        glDrawElements(GL_TRIANGLES, self.celestial_mesh.index_count, GL_UNSIGNED_INT, None)
+
     def _draw_outline(self, camera: Camera, block: tuple[int, int, int]) -> None:
         x, y, z = block
         pad = 0.002
@@ -309,6 +430,8 @@ class VoxelRenderer:
             self._delete_mesh(mesh)
         self.chunk_meshes.clear()
         self._delete_mesh(self.outline_mesh)
+        self._delete_mesh(self.celestial_mesh)
         glDeleteTextures(1, [self.atlas_texture])
         self.voxel_shader.delete()
         self.outline_shader.delete()
+        self.celestial_shader.delete()

@@ -9,6 +9,7 @@ from pyglet.window import key, mouse
 
 from src import settings
 from src.camera import Camera
+from src.daynight import DayNightCycle
 from src.player import PlayerController
 from src.raycast import RaycastHit, raycast
 from src.renderer import VoxelRenderer
@@ -33,6 +34,11 @@ class GameApp:
         self.renderer = VoxelRenderer()
         self.renderer.resize(self.window.width, self.window.height)
         self.renderer.rebuild_world(self.world)
+        self.day_night = DayNightCycle(
+            cycle_seconds=settings.DAY_NIGHT_CYCLE_SECONDS,
+            initial_time=settings.INITIAL_TIME_OF_DAY,
+        )
+        self.current_environment = self.day_night.sample()
         self.hud_text = ""
         self.fps = 0.0
         self.current_hit: RaycastHit | None = None
@@ -57,13 +63,15 @@ class GameApp:
             "jump": bool(self.window.keys[key.SPACE]),
         }
         self.player.update(dt, input_state, self.camera, self.world)
+        self.day_night.update(dt)
+        self.current_environment = self.day_night.sample()
         self.camera.position = self.player.eye_position()
         self.current_hit = raycast(self.world, self.camera.position, self.camera.forward(), settings.MAX_RAY_DISTANCE)
         self._update_hud()
 
     def draw(self) -> None:
         target = self.current_hit.block if self.current_hit else None
-        self.renderer.draw(self.camera, target_block=target)
+        self.renderer.draw(self.camera, self.current_environment, target_block=target)
 
     def on_resize(self, width: int, height: int) -> None:
         self.camera.aspect_ratio = width / max(height, 1)
@@ -112,6 +120,7 @@ class GameApp:
         self.hud_text = (
             "Voxel OpenGL Demo\n"
             f"FPS: {self.fps:.1f}\n"
+            f"Time: {self.day_night.time_of_day * 24.0:05.2f}h\n"
             f"Pos: ({self.player.position[0]:.2f}, {self.player.position[1]:.2f}, {self.player.position[2]:.2f})\n"
             f"Yaw/Pitch: ({self.camera.yaw:.1f}, {self.camera.pitch:.1f})\n"
             f"Chunks: {len(self.renderer.chunk_meshes)} / {len(self.world.chunks)}\n"
