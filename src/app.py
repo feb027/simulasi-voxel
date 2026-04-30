@@ -10,6 +10,7 @@ from pyglet.window import key, mouse
 from src import settings
 from src.camera import Camera
 from src.daynight import DayNightCycle
+from src.mining import MiningSystem
 from src.player import PlayerController
 from src.raycast import RaycastHit, raycast
 from src.renderer import VoxelRenderer
@@ -42,6 +43,7 @@ class GameApp:
         self.hud_text = ""
         self.fps = 0.0
         self.current_hit: RaycastHit | None = None
+        self.mining = MiningSystem()
 
         pyglet.clock.schedule_interval(self.update, 1.0 / 120.0)
         if options.smoke_test:
@@ -67,11 +69,29 @@ class GameApp:
         self.current_environment = self.day_night.sample()
         self.camera.position = self.player.eye_position()
         self.current_hit = raycast(self.world, self.camera.position, self.camera.forward(), settings.MAX_RAY_DISTANCE)
+
+        # --- Mining update ---
+        broken_block = self.mining.update(
+            dt, self.current_hit, self.window.mouse_left_held, self.world,
+        )
+        if broken_block is not None:
+            x, y, z = broken_block
+            self.world.set_block_world(x, y, z, AIR)
+            self._rebuild_for_block(x, y, z)
+
         self._update_hud()
 
     def draw(self) -> None:
         target = self.current_hit.block if self.current_hit else None
-        self.renderer.draw(self.camera, self.current_environment, target_block=target)
+        mining_target = self.mining.state.target_block if self.mining.state.is_mining else None
+        crack_stage = self.mining.state.crack_stage if self.mining.state.is_mining else 0
+        self.renderer.draw(
+            self.camera,
+            self.current_environment,
+            target_block=target,
+            mining_target=mining_target,
+            crack_stage=crack_stage,
+        )
 
     def on_resize(self, width: int, height: int) -> None:
         self.camera.aspect_ratio = width / max(height, 1)
@@ -92,11 +112,8 @@ class GameApp:
         if self.current_hit is None:
             return
 
-        if button == mouse.LEFT:
-            x, y, z = self.current_hit.block
-            self.world.set_block_world(x, y, z, AIR)
-            self._rebuild_for_block(x, y, z)
-        elif button == mouse.RIGHT:
+        # Left-click is now handled by the mining system in update().
+        if button == mouse.RIGHT:
             x, y, z = self.current_hit.previous
             if self.world.get_block_world(x, y, z) != AIR:
                 return
@@ -108,6 +125,11 @@ class GameApp:
                 return
             self._rebuild_for_block(x, y, z)
 
+    def on_mouse_release(self, button: int, modifiers: int) -> None:
+        del modifiers
+        if button == mouse.LEFT:
+            self.mining.stop_mining()
+
     def _rebuild_for_block(self, x: int, y: int, z: int) -> None:
         for chunk_pos in self.world.chunks_touched_by_block(x, y, z):
             self.renderer.rebuild_chunk(self.world, chunk_pos)
@@ -117,6 +139,14 @@ class GameApp:
         if self.current_hit is not None:
             block_text = f"{self.current_hit.block}"
 
+        # Mining progress bar
+        mining_line = ""
+        if self.mining.state.is_mining:
+            progress = self.mining.state.progress
+            filled = int(progress * 20)
+            bar = "█" * filled + "░" * (20 - filled)
+            mining_line = f"\nMining: [{bar}] {progress * 100:.0f}%"
+
         self.hud_text = (
             "Voxel OpenGL Demo\n"
             f"FPS: {self.fps:.1f}\n"
@@ -124,8 +154,9 @@ class GameApp:
             f"Pos: ({self.player.position[0]:.2f}, {self.player.position[1]:.2f}, {self.player.position[2]:.2f})\n"
             f"Yaw/Pitch: ({self.camera.yaw:.1f}, {self.camera.pitch:.1f})\n"
             f"Chunks: {len(self.renderer.chunk_meshes)} / {len(self.world.chunks)}\n"
-            f"Target: {block_text}\n"
-            "Move: WASD | Jump: Space | Break: Left Click | Place Dirt: Right Click | Mouse Lock: TAB"
+            f"Target: {block_text}"
+            f"{mining_line}\n"
+            "Move: WASD | Jump: Space | Mine: Hold Left Click | Place Dirt: Right Click | Mouse Lock: TAB"
         )
 
     def run(self) -> None:

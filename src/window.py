@@ -64,6 +64,7 @@ class VoxelWindow(pyglet.window.Window):
             font_size=18,
             color=(32, 32, 32, 255),
         )
+        self.mouse_left_held = False
 
     def on_draw(self) -> None:
         self.app.draw()
@@ -98,4 +99,12 @@ class VoxelWindow(pyglet.window.Window):
             self.mouse_captured = True
             self.set_exclusive_mouse(True)
             return
+        if button == mouse.LEFT:
+            self.mouse_left_held = True
         self.app.on_mouse_press(button, modifiers)
+
+    def on_mouse_release(self, x: int, y: int, button: int, modifiers: int) -> None:
+        if button == mouse.LEFT:
+            self.mouse_left_held = False
+        self.app.on_mouse_release(button, modifiers)
+

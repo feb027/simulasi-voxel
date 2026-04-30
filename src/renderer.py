@@ -152,9 +152,11 @@ class VoxelRenderer:
         self.voxel_shader = ShaderProgram(shader_dir / "voxel.vert", shader_dir / "voxel.frag")
         self.outline_shader = ShaderProgram(shader_dir / "outline.vert", shader_dir / "outline.frag")
         self.celestial_shader = ShaderProgram(shader_dir / "celestial.vert", shader_dir / "celestial.frag")
+        self.crack_shader = ShaderProgram(shader_dir / "crack.vert", shader_dir / "crack.frag")
         self.chunk_meshes: dict[tuple[int, int, int], ChunkMesh] = {}
         self.atlas_texture = self._create_texture_atlas()
         self.outline_mesh = self._create_outline_mesh()
+        self.crack_mesh = self._create_crack_mesh()
         self.celestial_mesh = self._create_celestial_mesh()
         self.configure_state()
 
@@ -188,6 +190,8 @@ class VoxelRenderer:
         camera: Camera,
         env: DayNightState,
         target_block: tuple[int, int, int] | None = None,
+        mining_target: tuple[int, int, int] | None = None,
+        crack_stage: int = 0,
     ) -> None:
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_CULL_FACE)
@@ -222,6 +226,9 @@ class VoxelRenderer:
 
         if target_block is not None:
             self._draw_outline(camera, target_block)
+
+        if mining_target is not None and crack_stage > 0:
+            self._draw_crack_overlay(camera, mining_target, crack_stage)
 
     def _upload_mesh(self, vertices: np.ndarray, indices: np.ndarray, dynamic: bool) -> ChunkMesh:
         vao = glGenVertexArrays(1)
@@ -420,6 +427,94 @@ class VoxelRenderer:
         glBindVertexArray(0)
         glEnable(GL_CULL_FACE)
 
+    def _create_crack_mesh(self) -> ChunkMesh:
+        """Create a reusable mesh for the crack overlay (6-face quad)."""
+        # 24 vertices (4 per face), each with position (3) + uv (2) = 5 floats
+        vertices = np.zeros(24 * 5, dtype=np.float32)
+        # 6 faces * 2 triangles * 3 indices = 36
+        indices_list = []
+        for face in range(6):
+            base = face * 4
+            indices_list.extend([
+                base, base + 1, base + 2,
+                base, base + 2, base + 3,
+            ])
+        indices = np.array(indices_list, dtype=np.uint32)
+
+        vao = glGenVertexArrays(1)
+        vbo = glGenBuffers(1)
+        ebo = glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_DYNAMIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+        stride = 5 * ctypes.sizeof(ctypes.c_float)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
+        glBindVertexArray(0)
+        return ChunkMesh(vao=vao, vbo=vbo, ebo=ebo, index_count=int(indices.size))
+
+    def _draw_crack_overlay(self, camera: Camera, block: tuple[int, int, int], crack_stage: int) -> None:
+        """Draw a procedural crack overlay on all visible faces of *block*."""
+        x, y, z = block
+        pad = 0.001  # slight offset to prevent z-fighting
+        x0, y0, z0 = x - pad, y - pad, z - pad
+        x1, y1, z1 = x + 1 + pad, y + 1 + pad, z + 1 + pad
+
+        # 6 faces: -Z, +Z, -X, +X, -Y, +Y  (4 verts each: pos3 + uv2)
+        vertices = np.array([
+            # -Z face
+            x0, y0, z0, 0.0, 0.0,
+            x1, y0, z0, 1.0, 0.0,
+            x1, y1, z0, 1.0, 1.0,
+            x0, y1, z0, 0.0, 1.0,
+            # +Z face
+            x0, y0, z1, 0.0, 0.0,
+            x1, y0, z1, 1.0, 0.0,
+            x1, y1, z1, 1.0, 1.0,
+            x0, y1, z1, 0.0, 1.0,
+            # -X face
+            x0, y0, z0, 0.0, 0.0,
+            x0, y0, z1, 1.0, 0.0,
+            x0, y1, z1, 1.0, 1.0,
+            x0, y1, z0, 0.0, 1.0,
+            # +X face
+            x1, y0, z0, 0.0, 0.0,
+            x1, y0, z1, 1.0, 0.0,
+            x1, y1, z1, 1.0, 1.0,
+            x1, y1, z0, 0.0, 1.0,
+            # -Y face
+            x0, y0, z0, 0.0, 0.0,
+            x1, y0, z0, 1.0, 0.0,
+            x1, y0, z1, 1.0, 1.0,
+            x0, y0, z1, 0.0, 1.0,
+            # +Y face
+            x0, y1, z0, 0.0, 0.0,
+            x1, y1, z0, 1.0, 0.0,
+            x1, y1, z1, 1.0, 1.0,
+            x0, y1, z1, 0.0, 1.0,
+        ], dtype=np.float32)
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.crack_mesh.vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_DYNAMIC_DRAW)
+
+        self.crack_shader.use()
+        self.crack_shader.set_mat4("u_projection", camera.projection_matrix())
+        self.crack_shader.set_mat4("u_view", camera.view_matrix())
+        self.crack_shader.set_int("u_crack_stage", crack_stage)
+
+        glDisable(GL_CULL_FACE)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBindVertexArray(self.crack_mesh.vao)
+        glDrawElements(GL_TRIANGLES, self.crack_mesh.index_count, GL_UNSIGNED_INT, None)
+        glBindVertexArray(0)
+        glDisable(GL_BLEND)
+        glEnable(GL_CULL_FACE)
+
     def _delete_mesh(self, mesh: ChunkMesh) -> None:
         glDeleteVertexArrays(1, [mesh.vao])
         glDeleteBuffers(1, [mesh.vbo])
@@ -430,8 +525,10 @@ class VoxelRenderer:
             self._delete_mesh(mesh)
         self.chunk_meshes.clear()
         self._delete_mesh(self.outline_mesh)
+        self._delete_mesh(self.crack_mesh)
         self._delete_mesh(self.celestial_mesh)
         glDeleteTextures(1, [self.atlas_texture])
         self.voxel_shader.delete()
         self.outline_shader.delete()
         self.celestial_shader.delete()
+        self.crack_shader.delete()
